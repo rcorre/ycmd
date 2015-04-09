@@ -381,6 +381,18 @@ def LanguageAgnosticIdentifierCompletion( server ):
                                     line_num = 21,
                                     column_num = 6 )
 
+def DSemanticCompletionResults( server ):
+  # We're using JavaScript here, but the language doesn't matter; the identifier
+  # completion engine just extracts identifiers.
+  server.SendEventNotification( Event.FileReadyToParse,
+                                test_filename = 'some_d.d',
+                                filetype = 'd' )
+
+  server.SendCodeCompletionRequest( test_filename = 'some_d.d',
+                                    filetype = 'd',
+                                    line_num = 21,
+                                    column_num = 6 )
+
 
 def CppSemanticCompletionResults( server ):
   # TODO: document this better
@@ -435,18 +447,19 @@ def Main():
   server = YcmdHandle.StartYcmdAndReturnHandle()
   server.WaitUntilReady()
 
-  LanguageAgnosticIdentifierCompletion( server )
-  PythonSemanticCompletionResults( server )
-  CppSemanticCompletionResults( server )
-  CsharpSemanticCompletionResults( server )
+  #LanguageAgnosticIdentifierCompletion( server )
+  #PythonSemanticCompletionResults( server )
+  #CppSemanticCompletionResults( server )
+  DSemanticCompletionResults( server )
+  #CsharpSemanticCompletionResults( server )
 
   # This will ask the server for a list of subcommands supported by a given
   # language completer.
-  PythonGetSupportedCommands( server )
+  #PythonGetSupportedCommands( server )
 
   # GoTo is an example of a completer subcommand.
   # Python and C# completers also support the GoTo subcommand.
-  CppGotoDeclaration( server )
+  #CppGotoDeclaration( server )
 
   print 'Shutting down server...'
   server.Shutdown()
