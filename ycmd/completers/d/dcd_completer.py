@@ -17,9 +17,28 @@
 # You should have received a copy of the GNU General Public License
 # along with YouCompleteMe.  If not, see <http://www.gnu.org/licenses/>.
 
+import os
+from ycmd import utils
+from ycmd import responses
 from ycmd.utils import ToUtf8IfNeeded
 from ycmd.completers.completer import Completer
-from ycmd import responses
+import logging
+
+SERVER_NOT_FOUND_MSG = ( 'DCD server binary not found at {0}. ' +
+                         'Did you compile it? You can do so by running ' +
+                         '"./install.sh --d-completer".' )
+MIN_LINES_IN_FILE_TO_PARSE = 5
+INVALID_FILE_MESSAGE = 'File is invalid.'
+FILE_TOO_SHORT_MESSAGE = (
+  'File is less than {0} lines long; not parsing.'.format(
+    MIN_LINES_IN_FILE_TO_PARSE ) )
+NO_DIAGNOSTIC_MESSAGE = 'No diagnostic for current line!'
+PATH_TO_DCD_SERVER_BINARY = os.path.join(
+  os.path.abspath( os.path.dirname( __file__ ) ),
+  '../../../third_party/dcd/bin/dcd-server' )
+PATH_TO_DCD_CLIENT_BINARY = os.path.join(
+  os.path.abspath( os.path.dirname( __file__ ) ),
+  '../../../third_party/dcd/bin/dcd-client' )
 
 class DCDCompleter( Completer ):
   """
@@ -29,7 +48,36 @@ class DCDCompleter( Completer ):
 
   def __init__( self, user_options ):
     super( DCDCompleter, self ).__init__( user_options )
+    self._dcd_port = None
+    self._dcd_phandle = None
 
+  # subcommand handling -----------------------------------------
+  # pattern of handling subcommands borrowed from CsharpCompleter
+
+  subcommands = {
+    'StartServer': ( lambda self, request_data: self._StartServer(
+        request_data ) ),
+    'StopServer': ( lambda self, request_data: self._StopServer() ),
+    'RestartServer': ( lambda self, request_data: self._RestartServer(
+        request_data ) ),
+    'ServerRunning': ( lambda self, request_data: self.ServerIsRunning() ),
+  }
+
+  def DefinedSubcommands( self ):
+    return DCDCompleter.subcommands.keys()
+
+  def OnUserCommand( self, arguments, request_data ):
+    if not arguments:
+      raise ValueError( self.UserCommandsHelpMessage() )
+
+    command = arguments[ 0 ]
+    if command in DCDCompleter.subcommands:
+      command_lamba = DCDCompleter.subcommands[ command ]
+      return command_lamba( self, request_data )
+    else:
+      raise ValueError( self.UserCommandsHelpMessage() )
+
+  # end subcommand handling -------------------------------------
 
   def SupportedFiletypes( self ):
     """ Just d """
@@ -49,7 +97,101 @@ class DCDCompleter( Completer ):
   def _GetDCDCompletions( self ):
     return [ DCDCompletion("fooable", "desc", "doc") ]
 
+  # subcommand definitions --------------------------------------
+  def _StartServer( self, request_data ):
+    """ Start the DCD server """
+    self._logger.info( 'startup' )
+
+    #Note: detection could throw an exception if an extra_conf_store needs to be confirmed
+    #TODO: find dub.json. use dutyl?
+    #path_to_solutionfile = solutiondetection.FindSolutionPath( request_data[ 'filepath' ] )
+    path_to_dubfile = 'dub.json'
+
+    #if not path_to_solutionfile:
+    #  raise RuntimeError( 'Autodetection of solution file failed.\n' )
+    #self._logger.info( u'Loading solution file {0}'.format( path_to_solutionfile ) )
+
+    self._ChooseDCDPort()
+
+    # we need to pass the command to Popen as a string since we're passing
+    # shell=True (as recommended by Python's doc)
+    command = ' '.join( [ PATH_TO_DCD_SERVER_BINARY,
+                         '--port',
+                         str( self._dcd_port ) ] )
+    # TODO: use -I to pass include paths (fetched from dutyl?)
+
+    filename_format = os.path.join( utils.PathToTempDir(),
+                                   u'dcd_{port}_{dub}_{std}.log' )
+
+    dubfile = os.path.basename( path_to_dubfile )
+    self._filename_stdout = filename_format.format(
+        port = self._dcd_port, dub = dubfile, std = 'stdout' )
+    self._filename_stderr = filename_format.format(
+        port = self._dcd_port, dub = dubfile, std = 'stderr' )
+
+    with open( self._filename_stderr, 'w' ) as fstderr:
+      with open( self._filename_stdout, 'w' ) as fstdout:
+        # shell=True is needed for Windows so DCD does not spawn
+        # in a new visible window
+        self._dcd_phandle = utils.SafePopen(
+            command, stdout = fstdout, stderr = fstderr, shell = True )
+
+    self._solution_path = path_to_dubfile
+
+    self._logger.info( 'Starting OmniSharp server' )
+
+  def _StopServer( self ):
+    """ Stop the DCD server """
+    self._ClientCommand("--shutdown")
+    self._dcd_phandle.wait()
+    self._dcd_port = None
+    self._dcd_phandle = None
+    if ( not self.user_options[ 'server_keep_logfiles' ] ):
+      os.unlink( self._filename_stdout );
+      os.unlink( self._filename_stderr );
+    self._logger.info( 'Stopping DCD server' )
+
+  def _RestartServer ( self, request_data ):
+    """ Restarts the DCD server """
+    if self.ServerIsRunning():
+      self._StopServer()
+    return self._StartServer( request_data )
+
+  def ServerIsRunning( self ):
+    """ Check if our DCD server is running (up and serving)."""
+    try:
+      return bool( self._dcd_port and
+                   self._ClientCommand("--query") == 0)
+    except:
+      return False
+
+  # end subcommand definitions ----------------------------------
+
+  # helper functions --------------------------------------------
+
+  def _ChooseDCDPort( self ):
+    self._dcd_port = int( self.user_options.get( 'dcd_server_port', 0 ) )
+    if not self._dcd_port:
+        self._dcd_port = utils.GetUnusedLocalhostPort()
+    self._logger.info( u'using port {0}'.format( self._dcd_port ) )
+
+  def _ClientCommand( self, args ):
+    command = PATH_TO_DCD_SERVER_BINARY + ' ' + args
+    with open( self._filename_stderr, 'w' ) as fstderr:
+      with open( self._filename_stdout, 'w' ) as fstdout:
+        # shell=True is needed for Windows so DCD does not spawn
+        # in a new visible window
+        client_proc = utils.SafePopen(
+            command, stdout = fstdout, stderr = fstderr, shell = True )
+        return client_proc.wait()
+
+  # end helper functions ----------------------------------------
+
 class DCDCompletion:
+  """
+  A completion provided by DCD
+  """
+
   def __init__( self, name, description, docstring ):
     self.name = name
     self.description = description
