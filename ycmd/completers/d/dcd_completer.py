@@ -21,6 +21,7 @@ import os
 from ycmd import utils
 from ycmd import responses
 from ycmd.utils import ToUtf8IfNeeded
+from ycmd.utils import CursorPosToByte
 from ycmd.completers.completer import Completer
 import logging
 
@@ -92,9 +93,12 @@ class DCDCompleter( Completer ):
                 ToUtf8IfNeeded( completion.name ),
                 ToUtf8IfNeeded( completion.description ),
                 ToUtf8IfNeeded( completion.docstring ) )
-             for completion in self._GetDCDCompletions() ]
+             for completion in self._GetDCDCompletions( request_data ) ]
 
-  def _GetDCDCompletions( self ):
+  def _GetDCDCompletions( self, request_data ):
+    bytenum = CursorPosToByte( request_data[ 'line_num' ],
+                               request_data[ 'column_num' ] )
+    _logger.info('getting completions at byte ' + bytenum)
     return [ DCDCompletion("fooable", "desc", "doc") ]
 
   # subcommand definitions --------------------------------------
@@ -208,3 +212,8 @@ class DCDCompletion:
     self.name = name
     self.description = description
     self.docstring = docstring
+
+
+def CursorPosToByte( line_num, col_num ):
+  import vim  # NOQA
+  return int(vim.eval( "line2byte('.')" ))
